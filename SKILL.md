@@ -90,10 +90,26 @@ Pi has 4 mechanisms for injecting context. Choose based on what the sub-agent ne
 
 | Mechanism | When to use | Example |
 |-----------|-------------|---------|
-| `@file` | Agent needs full file content (<200 lines) | `@src/config.ts "Explain this config"` |
+| `@file` | Agent needs full file content (<200 lines) or an image | `@src/config.ts "Explain this"` / `@screenshot.png "What's wrong?"` |
 | `--system-prompt <path>` | Custom agent identity — replaces pi's defaults | `--system-prompt /tmp/auditor.md` |
 | `--append-system-prompt <path>` | Add constraints to pi's default identity | `--append-system-prompt /tmp/rules.md` |
 | Piped stdin | Compressed summary from a prior agent | `echo "$scout_output" \| pi -p ...` |
+
+### Image Input
+
+The `@file` syntax also works for images. Pi auto-detects image files (png, jpg, gif, webp) by magic bytes and sends them as vision input. The model must support multimodal input (Gemini, Claude, GPT-4o do; most others don't).
+
+```bash
+# Describe a screenshot
+pi -p --no-session --model google/gemini-3.1-pro-preview \
+  @screenshot.png "Objective: Describe the UI elements in this screenshot. Output Format: bullet list."
+
+# Multiple images
+pi -p --no-session --model sonnet \
+  @before.png @after.png "Objective: Describe the visual differences between these two screenshots."
+```
+
+Images are auto-resized to fit within 2000x2000px / 4.5MB before sending.
 
 ### Rules
 
