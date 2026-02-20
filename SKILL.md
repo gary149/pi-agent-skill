@@ -5,13 +5,17 @@ description: Invoke the pi coding agent CLI for complex coding tasks on a specif
 
 # Pi Agent: Programmatic CLI Usage
 
+## Default Configuration
+
+Unless the user specifies a different model, always use **gemini-3.1-pro-preview** with **high thinking**:
+
+```bash
+pi -p --model google/gemini-3.1-pro-preview --thinking high "your prompt here"
+```
+
 ## Always Use Print Mode
 
 Use `pi -p` (print mode) for non-interactive, single-shot execution. Never use bare `pi` from another agent — it requires a TTY.
-
-```bash
-pi -p "your prompt here"
-```
 
 ## Specifying a Model
 
