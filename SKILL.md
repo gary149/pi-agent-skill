@@ -13,6 +13,12 @@ Unless the user specifies a different model, always use **gemini-3.1-pro-preview
 pi -p --no-session --model google/gemini-3.1-pro-preview --thinking high "your prompt here"
 ```
 
+**Fallback:** If the Google API fails (rate limit, outage, auth error), retry the same command with OpenRouter:
+
+```bash
+pi -p --no-session --model openrouter/google/gemini-3.1-pro-preview --thinking high "your prompt here"
+```
+
 ## Always Use Print Mode
 
 Use `pi -p` (print mode) for non-interactive, single-shot execution. Never use bare `pi` from another agent — it requires a TTY. Always add `--no-session` to avoid polluting the user's session list.
