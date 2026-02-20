@@ -17,6 +17,10 @@ pi -p --no-session --model google/gemini-3.1-pro-preview --thinking high "your p
 
 Use `pi -p` (print mode) for non-interactive, single-shot execution. Never use bare `pi` from another agent — it requires a TTY. Always add `--no-session` to avoid polluting the user's session list.
 
+## Execution Focus
+
+Pi sub-agents must focus on **execution, not exploration**. Every invocation should produce a concrete deliverable — code written, files changed, a structured analysis, a direct answer. Do not let sub-agents wander into open-ended codebase exploration, broad research, or tangential investigation. If context is needed, provide it upfront or use a dedicated scout step; the executing agent should already have what it needs to act.
+
 ---
 
 ## Sub-Agent Prompt Template
