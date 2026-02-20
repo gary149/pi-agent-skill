@@ -19,7 +19,9 @@ Use `pi -p` (print mode) for non-interactive, single-shot execution. Never use b
 
 ## Execution Focus
 
-Pi sub-agents must focus on **execution, not exploration**. Every invocation should produce a concrete deliverable — code written, files changed, a structured analysis, a direct answer. Do not let sub-agents wander into open-ended codebase exploration, broad research, or tangential investigation. If context is needed, provide it upfront or use a dedicated scout step; the executing agent should already have what it needs to act.
+Pi sub-agents must focus on **execution, not exploration**. Every invocation should produce a concrete deliverable — code written, files changed, a structured analysis, a direct answer.
+
+**The orchestrator (you) handles all exploration.** Use your own tools and subagents to read files, grep for patterns, understand the codebase, and gather context. Then pass the distilled context to pi for execution. Never spawn pi to "explore" or "investigate" — that's your job. Pi receives context and acts on it.
 
 ---
 
@@ -50,23 +52,28 @@ Vague prompts like "Review the code in src/" produce unpredictable results. The 
 
 ### Example: well-structured task
 
+The orchestrator has already explored the codebase and found the relevant files. Now it passes that context to pi for execution:
+
 ```bash
-pi -p --no-session --tools read,grep,find,ls \
+pi -p --no-session \
   --model google/gemini-3.1-pro-preview --thinking high \
-  "Objective: Identify all public API endpoints and their auth requirements in this project.
+  "Objective: Add rate limiting middleware to the login endpoint (max 5 attempts per IP per 15 min).
 
 Output Format:
-## Endpoints
-- \`METHOD /path\` — auth: <none|token|api-key> — file: <path:line>
+## Completed
+- what was done
 
-## Summary
-<1-2 sentences on auth coverage gaps>
+## Files Changed
+- path — description of change
 
 Context:
-This is a Node.js Express app. Routes are in src/routes/. Auth middleware is in src/middleware/auth.ts.
+- Login route: src/routes/auth.ts:42 (POST /api/login)
+- Auth middleware: src/middleware/auth.ts (exports: requireAuth, validateToken)
+- Existing rate limiter dep: express-rate-limit@7.1.0 in package.json
+- Pattern: middleware is registered in src/app.ts:15-30
 
 Boundaries:
-Do not modify any files. Do not review test files. Do not suggest fixes."
+Do not modify test files. Do not refactor existing auth code. Do not add new dependencies."
 ```
 
 ---
@@ -121,13 +128,13 @@ Boundaries: Do not modify files. Do not review test files."
 
 ## Tool Scoping
 
-Match tools to the task type. Giving an analysis agent write/edit tools is asking for trouble.
+Match tools to the task type. Giving a review agent write/edit tools is asking for trouble. Exploration/recon is the orchestrator's job — don't delegate it to pi.
 
 | Task type | Tools | Thinking | Rationale |
 |-----------|-------|----------|-----------|
-| Recon / exploration | `read,grep,find,ls` | minimal–medium | Fast, cheap, read-only |
 | Code review | `read,grep,find,ls,bash` | medium–high | Bash for `git diff/log` only |
 | Implementation | `read,bash,edit,write` (default) | high | Full capabilities |
+| Targeted analysis | `read,grep,find,ls` | medium–high | Read-only, orchestrator already identified what to analyze |
 | Pure reasoning | `--no-tools` | high–xhigh | No file access needed |
 | Build / test | `read,bash,ls` | minimal | Run commands, read output |
 
@@ -148,8 +155,14 @@ Use `--no-skills --no-extensions` when you're providing a complete `--system-pro
 ### Text capture (simple)
 
 ```bash
-result=$(pi -p --no-session --tools read,grep,find,ls \
-  --model haiku "Objective: List exported functions in src/index.ts. Output Format: one per line.")
+result=$(pi -p --no-session --no-tools \
+  --model haiku "Objective: Convert this list of endpoints into an OpenAPI snippet.
+Output Format: YAML OpenAPI paths block.
+Context:
+- GET /api/users (returns User[])
+- POST /api/users (body: CreateUserDTO, returns User)
+- DELETE /api/users/:id (returns 204)
+Boundaries: Only output YAML, no explanation.")
 echo "$result"
 ```
 
@@ -183,18 +196,21 @@ for line in sys.stdin:
 For parallel sub-agents, have each write to a named output file, then merge:
 
 ```bash
-# Fan out: 3 agents analyze different directories in parallel
-for dir in src/api src/auth src/db; do
-  pi -p --no-session --tools read,grep,find,ls \
-    --model haiku \
-    "Objective: List all TODO comments in $dir/.
-Output Format: - file:line: comment text
-Boundaries: Only report TODOs, nothing else." > "/tmp/todos-$(basename $dir).txt" &
+# Fan out: 3 pi agents implement the same refactor across different modules
+for mod in api auth db; do
+  pi -p --no-session \
+    --model google/gemini-3.1-pro-preview --thinking high \
+    "Objective: Replace all console.log calls with the structured logger in src/$mod/.
+Output Format:
+## Files Changed
+- path:line — what was changed
+Context: Logger import is \`import { logger } from '@/lib/logger'\`. Use logger.info/warn/error.
+Boundaries: Only modify src/$mod/. Do not change test files." > "/tmp/refactor-$mod.txt" &
 done
 wait
 
-# Merge results
-cat /tmp/todos-*.txt > /tmp/all-todos.txt
+# Orchestrator merges results
+cat /tmp/refactor-*.txt
 ```
 
 ---
@@ -223,7 +239,25 @@ Context: This is a TypeScript project using ESLint.
 Boundaries: Do not modify files. Do not review tests."
 ```
 
-### 3. Append-only context chains
+### 3. Delegating exploration to pi
+
+```bash
+# BAD: using pi to explore the codebase
+pi -p "Explore the auth module and tell me how it works"
+pi -p --tools read,grep,find,ls "Scout the codebase for relevant files..."
+
+# GOOD: explore yourself, then delegate execution
+# (use your own tools: Read, Grep, Glob, or spawn subagents)
+# Once you understand the codebase, pass distilled context to pi:
+pi -p --no-session "Objective: Add rate limiting to POST /api/login.
+Context:
+- Route: src/routes/auth.ts:42
+- Middleware pattern: src/middleware/auth.ts
+- Dep available: express-rate-limit@7.1.0
+Boundaries: Do not modify tests."
+```
+
+### 4. Append-only context chains
 
 ```bash
 # BAD: each agent gets ALL prior outputs, context explodes
@@ -234,15 +268,7 @@ step3=$(pi -p "Given analysis: $step1 and plan: $step2 — now implement...")
 
 Compress between steps. Extract only the sections the next agent needs.
 
-```bash
-# GOOD: compress handoffs
-scout_output=$(pi -p --tools read,grep,find,ls "Scout the auth module...")
-# Extract just the file list and key findings
-context=$(echo "$scout_output" | sed -n '/^## Files/,/^## /p' | head -30)
-pi -p "Objective: Implement rate limiting. Context: $context Boundaries: ..."
-```
-
-### 4. No tool scoping
+### 5. No tool scoping
 
 ```bash
 # BAD: analysis agent has edit/write tools, might modify files
@@ -252,7 +278,7 @@ pi -p "Review this code for bugs" @src/app.ts
 pi -p --tools read,grep,find,ls "Review this code for bugs" @src/app.ts
 ```
 
-### 5. Session pollution
+### 6. Session pollution
 
 ```bash
 # BAD: creates a persistent session for a throwaway task
@@ -262,7 +288,7 @@ pi -p --model haiku "What does this regex do?"
 pi -p --no-session --model haiku "What does this regex do?"
 ```
 
-### 6. Passing stale/irrelevant prior outputs
+### 7. Passing stale/irrelevant prior outputs
 
 ```bash
 # BAD: passing 5 prior agent outputs when only the last one matters
@@ -276,33 +302,19 @@ pi -p "Objective: Summarize findings. Context: $step5 Boundaries: ..."
 
 ## Orchestration Examples
 
-### Scout-then-implement chain
+### Orchestrator recon, then pi executes
 
-Use a fast/cheap model for recon, then a capable model for implementation.
+The orchestrator (you) does the exploration using your own tools/subagents, then passes distilled context to pi for implementation.
 
 ```bash
-# Step 1: Scout with haiku (fast, read-only)
-scout=$(pi -p --no-session \
-  --tools read,grep,find,ls \
-  --model haiku --thinking minimal \
-  "Objective: Find all files related to user authentication and summarize the auth flow.
+# Step 1: YOU (the orchestrator) explore the codebase
+# Use your own Read, Grep, Glob tools or spawn Explore subagents to understand:
+# - Login route: src/routes/auth.ts:42 (POST /api/login, calls AuthService.login)
+# - Auth middleware: src/middleware/auth.ts (exports requireAuth, validateToken)
+# - express-rate-limit@7.1.0 already in package.json
+# - Middleware registered in src/app.ts:15-30
 
-Output Format:
-## Files
-- path:line — description
-
-## Auth Flow
-1. step description
-
-## Key Types
-- TypeName — purpose
-
-Boundaries: Do not modify files. Do not review tests or configs.")
-
-# Step 2: Extract compressed context
-context=$(echo "$scout" | head -60)
-
-# Step 3: Implement with gemini (capable, full tools)
+# Step 2: Pass distilled context to pi for execution
 pi -p --no-session \
   --model google/gemini-3.1-pro-preview --thinking high \
   "Objective: Add rate limiting to the login endpoint (max 5 attempts per IP per 15 min).
@@ -318,18 +330,23 @@ Output Format:
 - anything the caller should know
 
 Context:
-$context
+- Login route: src/routes/auth.ts:42 (POST /api/login, calls AuthService.login)
+- Auth middleware pattern: src/middleware/auth.ts (exports requireAuth, validateToken)
+- express-rate-limit@7.1.0 already in package.json
+- Middleware registered in src/app.ts:15-30
 
 Boundaries: Only modify auth-related files. Do not refactor existing code. Do not change tests."
 ```
 
-### Parallel fan-out audit with merge
+### Parallel fan-out execution with merge
+
+The orchestrator has already identified the audit areas. Each pi instance executes a focused, scoped audit.
 
 ```bash
-# Define audit areas
+# Orchestrator has identified these areas to audit (via its own exploration)
 areas=("SQL injection:src/db" "XSS:src/views" "Auth bypass:src/auth")
 
-# Fan out parallel audits
+# Fan out parallel executions — each pi does targeted analysis, not exploration
 for entry in "${areas[@]}"; do
   IFS=: read -r vuln_type dir <<< "$entry"
   pi -p --no-session --tools read,grep,find,ls \
@@ -340,12 +357,12 @@ Output Format:
 ### $vuln_type Findings
 - **[HIGH|MED|LOW]** path:line — description
 
-Boundaries: Do not modify files. Only report $vuln_type issues." \
+Boundaries: Do not modify files. Only report $vuln_type issues. Do not explore outside $dir/." \
     > "/tmp/audit-$(echo $vuln_type | tr ' ' '-').txt" &
 done
 wait
 
-# Merge with a summarizer
+# Merge — orchestrator can do this itself, or use pi for structured formatting
 cat /tmp/audit-*.txt | pi -p --no-session --no-tools \
   --model haiku --thinking minimal \
   "Objective: Merge these security audit results into a single prioritized report.
@@ -355,9 +372,6 @@ Output Format:
 ## Medium
 ## Low
 Each item: - path:line — vulnerability type — description
-
-Context (piped via stdin):
-$(cat /tmp/audit-*.txt)
 
 Boundaries: Do not add findings not present in the input. Do not suggest fixes."
 ```
@@ -395,14 +409,20 @@ Boundaries: Do not modify files. Focus only on the migration decision."
 ### Structured output with JSON mode
 
 ```bash
-pi -p --no-session --mode json \
-  --tools read,grep,find,ls \
+# Orchestrator already read the file and extracted the function signatures.
+# Now use pi to generate documentation from that context.
+pi -p --no-session --mode json --no-tools \
   --model sonnet --thinking medium \
-  "Objective: List all exported functions in packages/coding-agent/src/index.ts.
+  "Objective: Generate JSDoc comments for these functions.
 
-Output Format: A markdown table with columns: Function Name, Line Number, Parameters.
+Output Format: For each function, output the JSDoc block followed by the signature.
 
-Boundaries: Do not modify files." \
+Context:
+- createSession(userId: string, options?: SessionOptions): Promise<Session> — creates a new auth session
+- validateToken(token: string): TokenPayload | null — validates JWT, returns null if invalid
+- revokeSession(sessionId: string): Promise<void> — invalidates an active session
+
+Boundaries: Only output JSDoc + signatures. No explanation." \
   2>/dev/null \
   | while IFS= read -r line; do
       type=$(echo "$line" | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('type',''))" 2>/dev/null)
